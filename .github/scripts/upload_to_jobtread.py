@@ -8,7 +8,7 @@ PAVE_URL = "https://api.jobtread.com/pave"
 def jobtread_query(query):
     payload = {"query": {"$": {"grantKey": GRANT_KEY}, **query}}
     response = requests.post(PAVE_URL, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
-    print(f"  HTTP {response.status_code}: {response.text[:500]}")
+    print(f"  HTTP {response.status_code}: {response.text[:800]}")
     response.raise_for_status()
     result = response.json()
     if "errors" in result:
@@ -58,23 +58,20 @@ def main():
             raise Exception(f"GCS upload failed: {upload_resp.status_code}")
         print("  ✓ Uploaded to GCS")
 
-        # Step 3: Attach to cost item using _type: "new"
+        # Step 3: createFile to attach to cost item
         result = jobtread_query({
-            "updateCostItem": {
+            "createFile": {
                 "$": {
-                    "id": cost_item_id,
-                    "files": [{"_type": "new", "name": filename, "uploadRequestId": upload_req_id}]
+                    "targetType": "costItem",
+                    "targetId": cost_item_id,
+                    "name": filename,
+                    "uploadRequestId": upload_req_id,
                 },
-                "costItem": {
-                    "$": {"id": cost_item_id},
-                    "id": {}, "name": {},
-                    "files": {"nodes": {"id": {}, "name": {}}}
-                }
+                "createdFile": {"id": {}, "name": {}}
             }
         })
-        item = result["updateCostItem"]["costItem"]
-        files = item.get("files", {}).get("nodes", [])
-        print(f"  ✓ Attached! Cost item '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
+        created = result["createFile"]["createdFile"]
+        print(f"  ✓ File created: {created['name']} (id: {created['id']})")
         os.remove(queue_file)
         print(f"  ✓ Queue file removed")
 
