@@ -58,20 +58,23 @@ def main():
             raise Exception(f"GCS upload failed: {upload_resp.status_code}")
         print("  ✓ Uploaded to GCS")
 
-        # Step 3: createFile to attach to cost item
+        # Step 3: Attach to cost item - no _type for new files, just name + uploadRequestId
         result = jobtread_query({
-            "createFile": {
+            "updateCostItem": {
                 "$": {
-                    "targetType": "costItem",
-                    "targetId": cost_item_id,
-                    "name": filename,
-                    "uploadRequestId": upload_req_id,
+                    "id": cost_item_id,
+                    "files": [{"name": filename, "uploadRequestId": upload_req_id}]
                 },
-                "createdFile": {"id": {}, "name": {}}
+                "costItem": {
+                    "$": {"id": cost_item_id},
+                    "id": {}, "name": {},
+                    "files": {"nodes": {"id": {}, "name": {}}}
+                }
             }
         })
-        created = result["createFile"]["createdFile"]
-        print(f"  ✓ File created: {created['name']} (id: {created['id']})")
+        item = result["updateCostItem"]["costItem"]
+        files = item.get("files", {}).get("nodes", [])
+        print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
         os.remove(queue_file)
         print(f"  ✓ Queue file removed")
 
