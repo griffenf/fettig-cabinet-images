@@ -15,6 +15,32 @@ def jobtread_query(query):
         raise Exception(f"API error: {result['errors']}")
     return result
 
+def upload_one_image(image_path, filename):
+    with open(image_path, "rb") as f:
+        image_data = f.read()
+    file_size = len(image_data)
+    ext = filename.lower().split(".")[-1]
+    content_type = "image/png" if ext == "png" else "image/jpeg"
+
+    result = jobtread_query({
+        "createUploadRequest": {
+            "$": {"organizationId": ORG_ID, "size": file_size, "type": {"fromName": filename}},
+            "createdUploadRequest": {"id": {}, "url": {}, "method": {}, "headers": {}}
+        }
+    })
+    upload_req = result["createUploadRequest"]["createdUploadRequest"]
+    upload_url = upload_req["url"]
+    upload_req_id = upload_req["id"]
+    headers = dict(upload_req.get("headers") or {})
+    headers["content-type"] = content_type
+    print(f"  Upload request ID: {upload_req_id}")
+
+    upload_resp = requests.put(upload_url, data=image_data, headers=headers, timeout=60)
+    print(f"  GCS response: {upload_resp.status_code}")
+    if upload_resp.status_code not in (200, 204):
+        raise Exception(f"GCS upload failed: {upload_resp.status_code}")
+    return upload_req_id
+
 def main():
     queue_files = sorted(glob.glob("pending-uploads/*.json"))
     if not queue_files:
@@ -25,58 +51,39 @@ def main():
     for queue_file in queue_files:
         with open(queue_file) as f:
             job = json.load(f)
+
         cost_item_id = job["costItemId"]
-        image_path = job["imagePath"]
-        filename = os.path.basename(image_path)
-        print(f"\nProcessing: {filename} -> {cost_item_id}")
+        # Support single imagePath or multiple imagePaths
+        image_paths = job.get("imagePaths") or [job["imagePath"]]
+        print(f"\nProcessing {len(image_paths)} image(s) -> cost item {cost_item_id}")
 
-        with open(image_path, "rb") as f:
-            image_data = f.read()
-        file_size = len(image_data)
-        ext = filename.lower().split(".")[-1]
-        content_type = "image/png" if ext == "png" else "image/jpeg"
-        print(f"  Size: {file_size} bytes, type: {content_type}")
+        try:
+            files_payload = []
+            for image_path in image_paths:
+                filename = os.path.basename(image_path)
+                print(f"  Uploading: {filename}")
+                upload_req_id = upload_one_image(image_path, filename)
+                files_payload.append({"name": filename, "uploadRequestId": upload_req_id})
+                print(f"  ✓ {filename} uploaded to GCS")
 
-        # Step 1: Create upload request
-        result = jobtread_query({
-            "createUploadRequest": {
-                "$": {"organizationId": ORG_ID, "size": file_size, "type": {"fromName": filename}},
-                "createdUploadRequest": {"id": {}, "url": {}, "method": {}, "headers": {}}
-            }
-        })
-        upload_req = result["createUploadRequest"]["createdUploadRequest"]
-        upload_url = upload_req["url"]
-        upload_req_id = upload_req["id"]
-        headers = dict(upload_req.get("headers") or {})
-        headers["content-type"] = content_type
-        print(f"  Upload request ID: {upload_req_id}")
-
-        # Step 2: Upload to Google Storage
-        upload_resp = requests.put(upload_url, data=image_data, headers=headers, timeout=60)
-        print(f"  GCS response: {upload_resp.status_code} {upload_resp.text[:200]}")
-        if upload_resp.status_code not in (200, 204):
-            raise Exception(f"GCS upload failed: {upload_resp.status_code}")
-        print("  ✓ Uploaded to GCS")
-
-        # Step 3: Attach to cost item - no _type for new files, just name + uploadRequestId
-        result = jobtread_query({
-            "updateCostItem": {
-                "$": {
-                    "id": cost_item_id,
-                    "files": [{"name": filename, "uploadRequestId": upload_req_id}]
-                },
-                "costItem": {
-                    "$": {"id": cost_item_id},
-                    "id": {}, "name": {},
-                    "files": {"nodes": {"id": {}, "name": {}}}
+            # Attach all files to cost item in one call
+            result = jobtread_query({
+                "updateCostItem": {
+                    "$": {"id": cost_item_id, "files": files_payload},
+                    "costItem": {
+                        "$": {"id": cost_item_id},
+                        "id": {}, "name": {},
+                        "files": {"nodes": {"id": {}, "name": {}}}
+                    }
                 }
-            }
-        })
-        item = result["updateCostItem"]["costItem"]
-        files = item.get("files", {}).get("nodes", [])
-        print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
-        os.remove(queue_file)
-        print(f"  ✓ Queue file removed")
+            })
+            item = result["updateCostItem"]["costItem"]
+            files = item.get("files", {}).get("nodes", [])
+            print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
+            os.remove(queue_file)
+            print(f"  ✓ Queue file removed")
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
 
     print("\nDone!")
 
