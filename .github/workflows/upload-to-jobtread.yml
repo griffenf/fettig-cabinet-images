@@ -1,0 +1,34 @@
+name: Upload Cabinet Images to JobTread
+
+on:
+  push:
+    paths:
+      - 'pending-uploads/*.json'
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Upload images to JobTread
+        env:
+          JOBTREAD_GRANT_KEY: ${{ secrets.JOBTREAD_GRANT_KEY }}
+          JOBTREAD_ORG_ID: ${{ secrets.JOBTREAD_ORG_ID }}
+        run: python .github/scripts/upload_to_jobtread.py
+
+      - name: Clean up processed queue files
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add -A
+          git diff --staged --quiet || git commit -m "Clean up processed upload queue"
+          git push
