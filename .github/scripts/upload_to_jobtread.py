@@ -52,10 +52,11 @@ def main():
         with open(queue_file) as f:
             job = json.load(f)
 
-        cost_item_id = job["costItemId"]
+        target_type = job.get("targetType", "costItem")
+        target_id = job.get("targetId") or job.get("costItemId")
         # Support single imagePath or multiple imagePaths
         image_paths = job.get("imagePaths") or [job["imagePath"]]
-        print(f"\nProcessing {len(image_paths)} image(s) -> cost item {cost_item_id}")
+        print(f"\nProcessing {len(image_paths)} image(s) -> {target_type} {target_id}")
 
         try:
             files_payload = []
@@ -66,18 +67,32 @@ def main():
                 files_payload.append({"name": filename, "uploadRequestId": upload_req_id})
                 print(f"  ✓ {filename} uploaded to GCS")
 
-            # Attach all files to cost item in one call
-            result = jobtread_query({
-                "updateCostItem": {
-                    "$": {"id": cost_item_id, "files": files_payload},
-                    "costItem": {
-                        "$": {"id": cost_item_id},
-                        "id": {}, "name": {},
-                        "files": {"nodes": {"id": {}, "name": {}}}
+            # Attach files to the correct target type
+            if target_type == "costGroup":
+                result = jobtread_query({
+                    "updateCostGroup": {
+                        "$": {"id": target_id, "files": files_payload},
+                        "costGroup": {
+                            "$": {"id": target_id},
+                            "id": {}, "name": {},
+                            "files": {"nodes": {"id": {}, "name": {}}}
+                        }
                     }
-                }
-            })
-            item = result["updateCostItem"]["costItem"]
+                })
+                item = result["updateCostGroup"]["costGroup"]
+            else:
+                result = jobtread_query({
+                    "updateCostItem": {
+                        "$": {"id": target_id, "files": files_payload},
+                        "costItem": {
+                            "$": {"id": target_id},
+                            "id": {}, "name": {},
+                            "files": {"nodes": {"id": {}, "name": {}}}
+                        }
+                    }
+                })
+                item = result["updateCostItem"]["costItem"]
+
             files = item.get("files", {}).get("nodes", [])
             print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
             os.remove(queue_file)
