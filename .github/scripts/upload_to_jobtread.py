@@ -19,8 +19,6 @@ def upload_one_image(image_path, filename):
     with open(image_path, "rb") as f:
         image_data = f.read()
     file_size = len(image_data)
-    ext = filename.lower().split(".")[-1]
-    content_type = "image/png" if ext == "png" else "image/jpeg"
 
     result = jobtread_query({
         "createUploadRequest": {
@@ -32,7 +30,7 @@ def upload_one_image(image_path, filename):
     upload_url = upload_req["url"]
     upload_req_id = upload_req["id"]
     headers = dict(upload_req.get("headers") or {})
-    headers["content-type"] = content_type
+    headers["content-type"] = "image/png"
     print(f"  Upload request ID: {upload_req_id}")
 
     upload_resp = requests.put(upload_url, data=image_data, headers=headers, timeout=60)
@@ -42,22 +40,11 @@ def upload_one_image(image_path, filename):
     return upload_req_id
 
 def get_existing_files(target_type, target_id):
-    """Fetch existing files on a costGroup or costItem so we can preserve them on update."""
     if target_type == "costGroup":
-        result = jobtread_query({
-            "costGroup": {
-                "$": {"id": target_id},
-                "files": {"nodes": {"id": {}, "name": {}}}
-            }
-        })
+        result = jobtread_query({"costGroup": {"$": {"id": target_id}, "files": {"nodes": {"id": {}, "name": {}}}}})
         return result["costGroup"]["files"]["nodes"]
     else:
-        result = jobtread_query({
-            "costItem": {
-                "$": {"id": target_id},
-                "files": {"nodes": {"id": {}, "name": {}}}
-            }
-        })
+        result = jobtread_query({"costItem": {"$": {"id": target_id}, "files": {"nodes": {"id": {}, "name": {}}}}})
         return result["costItem"]["files"]["nodes"]
 
 def main():
@@ -77,10 +64,10 @@ def main():
         print(f"\nProcessing {len(image_paths)} image(s) -> {target_type} {target_id}")
 
         try:
-            # Fetch existing files to preserve them
-            existing_files = get_existing_files(target_type, target_id)
-            print(f"  Found {len(existing_files)} existing file(s) to preserve")
-            existing_payload = [{"_type": "existing", "id": f["id"], "name": f["name"]} for f in existing_files]
+            # Fetch existing files and preserve them using correct _type
+            existing_nodes = get_existing_files(target_type, target_id)
+            print(f"  Preserving {len(existing_nodes)} existing file(s): {[f['name'] for f in existing_nodes]}")
+            existing_payload = [{"_type": "lineItemFile", "id": f["id"], "name": f["name"]} for f in existing_nodes]
 
             # Upload new files
             new_payload = []
@@ -92,15 +79,13 @@ def main():
                 print(f"  ✓ {filename} uploaded to GCS")
 
             files_payload = existing_payload + new_payload
+            print(f"  Total files in payload: {len(files_payload)}")
 
             if target_type == "costGroup":
                 result = jobtread_query({
                     "updateCostGroup": {
                         "$": {"id": target_id, "files": files_payload},
-                        "costGroup": {
-                            "$": {"id": target_id},
-                            "id": {}, "name": {}
-                        }
+                        "costGroup": {"$": {"id": target_id}, "id": {}, "name": {}}
                     }
                 })
                 name = result["updateCostGroup"]["costGroup"]["name"]
@@ -118,7 +103,7 @@ def main():
                 })
                 item = result["updateCostItem"]["costItem"]
                 files = item.get("files", {}).get("nodes", [])
-                print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s): {[f['name'] for f in files]}")
+                print(f"  ✓ Attached! '{item['name']}' now has {len(files)} file(s)")
 
             os.remove(queue_file)
             print(f"  ✓ Queue file removed")
