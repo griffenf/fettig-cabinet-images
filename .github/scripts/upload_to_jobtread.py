@@ -41,6 +41,25 @@ def upload_one_image(image_path, filename):
         raise Exception(f"GCS upload failed: {upload_resp.status_code}")
     return upload_req_id
 
+def get_existing_files(target_type, target_id):
+    """Fetch existing files on a costGroup or costItem so we can preserve them on update."""
+    if target_type == "costGroup":
+        result = jobtread_query({
+            "costGroup": {
+                "$": {"id": target_id},
+                "files": {"nodes": {"id": {}, "name": {}}}
+            }
+        })
+        return result["costGroup"]["files"]["nodes"]
+    else:
+        result = jobtread_query({
+            "costItem": {
+                "$": {"id": target_id},
+                "files": {"nodes": {"id": {}, "name": {}}}
+            }
+        })
+        return result["costItem"]["files"]["nodes"]
+
 def main():
     queue_files = sorted(glob.glob("pending-uploads/*.json"))
     if not queue_files:
@@ -58,13 +77,21 @@ def main():
         print(f"\nProcessing {len(image_paths)} image(s) -> {target_type} {target_id}")
 
         try:
-            files_payload = []
+            # Fetch existing files to preserve them
+            existing_files = get_existing_files(target_type, target_id)
+            print(f"  Found {len(existing_files)} existing file(s) to preserve")
+            existing_payload = [{"_type": "existing", "id": f["id"], "name": f["name"]} for f in existing_files]
+
+            # Upload new files
+            new_payload = []
             for image_path in image_paths:
                 filename = os.path.basename(image_path)
                 print(f"  Uploading: {filename}")
                 upload_req_id = upload_one_image(image_path, filename)
-                files_payload.append({"name": filename, "uploadRequestId": upload_req_id})
+                new_payload.append({"name": filename, "uploadRequestId": upload_req_id})
                 print(f"  ✓ {filename} uploaded to GCS")
+
+            files_payload = existing_payload + new_payload
 
             if target_type == "costGroup":
                 result = jobtread_query({
